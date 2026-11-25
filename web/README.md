@@ -56,3 +56,29 @@ npm test
 `/api` на единственный процесс FastAPI на том же домене. Dev proxy работает
 только в `npm run dev`; `npm run preview` не заменяет такой reverse proxy.
 Ссылки приглашения ведут на `/?invite=...` фронтенда, а не на JSON API.
+
+## Контейнер nginx
+
+Из корня репозитория:
+
+```powershell
+docker build --platform linux/amd64 -t tictactoe-web .\web
+docker run --rm -p 8080:8080 -e BACKEND_HOST=your-api.example.com tictactoe-web
+```
+
+Откройте http://localhost:8080. Обязательная переменная `BACKEND_HOST` задаётся
+при запуске контейнера: HTTPS-имя хоста API без `https://`, пути и завершающего
+слеша. Например, используйте FQDN backend Container App. Пересборка фронтенда
+при смене хоста не нужна. Контейнер не запустится без `BACKEND_HOST`.
+
+nginx обслуживает статические файлы и проксирует `/api/...` по HTTPS, сохраняя
+путь и заголовок Authorization. Сертификат API проверяется; самоподписанные
+сертификаты не поддерживаются без настройки доверенного центра сертификации.
+Браузер обращается только к nginx, поэтому CORS на API не требуется.
+
+В Azure Container Apps задайте frontend ingress target port `8080` и включите
+HTTPS для внешнего доступа. Backend ingress target port — `8000`; если оба
+приложения находятся в одном Container Apps environment, backend может иметь
+internal ingress. Используйте его FQDN в `BACKEND_HOST`, а не `localhost`.
+Для backend оставьте одну реплику и не распределяйте трафик между ревизиями:
+игры хранятся в памяти одного процесса.

@@ -23,6 +23,27 @@ deployment on a reachable HTTPS server. Links use the address of the creation
 request; behind a reverse proxy, configure the public host and trusted forwarded
 headers correctly. This prototype is not hardened for unrestricted public use.
 
+## Container
+
+From the repository root:
+
+```powershell
+docker build --platform linux/amd64 -t tictactoe-api .\api
+docker run --rm -p 8000:8000 tictactoe-api
+```
+
+Open http://localhost:8000/docs. The image installs dependencies from `uv.lock`,
+runs as a non-root user, and starts Uvicorn on `0.0.0.0:8000` with one worker
+and no development reload.
+
+For Azure Container Apps, set the backend ingress target port to `8000`.
+Use one replica (min and max both `1`) and one active revision without traffic
+splitting: game state is in memory and is lost on restart or deployment.
+If the frontend is in the same Container Apps environment, backend ingress can
+be internal. Set the frontend container's `BACKEND_HOST` to the backend ingress
+FQDN, without a scheme or path. nginx proxies `/api` over HTTPS, so browser CORS
+is not needed. See the [frontend container instructions](../web/README.md).
+
 ## API flow
 
 1. `POST /api/games` with `{"mode":"friend"}` creates a game. The response contains
