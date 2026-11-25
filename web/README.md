@@ -74,6 +74,8 @@ docker run --rm -p 8080:8080 -e BACKEND_HOST=your-api.example.com tictactoe-web
 nginx обслуживает статические файлы и проксирует `/api/...` по HTTPS, сохраняя
 путь и заголовок Authorization. Сертификат API проверяется; самоподписанные
 сертификаты не поддерживаются без настройки доверенного центра сертификации.
+Для цепочки сертификатов Azure настроена глубина проверки `proxy_ssl_verify_depth 3`;
+проверка сертификата и имени backend остаётся включённой.
 Браузер обращается только к nginx, поэтому CORS на API не требуется.
 
 В Azure Container Apps задайте frontend ingress target port `8080` и включите
