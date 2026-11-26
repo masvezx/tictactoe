@@ -64,6 +64,7 @@ function App() {
   const [mode, setMode] = useState(invitation ? 'friend' : session?.mode || 'computer');
   const modeRestored = useRef(Boolean(invitation || session?.mode || !session));
   const [difficulty, setDifficulty] = useState('medium');
+  const [mark, setMark] = useState('X');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
@@ -114,7 +115,7 @@ function App() {
         }
         setInviteLoading(false);
         if (!busy.current) setError(null);
-        if (state.status === 'waiting' || state.status === 'playing') {
+        if (state.status === 'waiting' || state.status === 'playing' || (session && state.mode === 'friend')) {
           timer = setTimeout(refresh, 1000);
         }
       } catch (err) {
@@ -168,7 +169,7 @@ function App() {
 
   async function createGame() {
     await action(async () => {
-      const data = await request('/api/games', { body: mode === 'computer' ? { mode, difficulty } : { mode } });
+      const data = await request('/api/games', { body: { mode, difficulty, mark } });
       const token = data.invitation_url ? new URL(data.invitation_url).pathname.split('/').pop() : null;
       const url = token ? `${window.location.origin}/?invite=${encodeURIComponent(token)}` : null;
       window.history.replaceState(null, '', window.location.pathname);
@@ -194,6 +195,15 @@ function App() {
     });
   }
 
+  async function rematch() {
+    await action(async () => {
+      const state = await request(`/api/games/${session.game_id}/rematch`, {
+        token: session.player_token, body: { round_number: game.round_number },
+      });
+      setGame(state);
+    });
+  }
+
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(session.invitation_url);
@@ -204,15 +214,18 @@ function App() {
   }
 
   const notebook = theme === 'grid' || theme === 'ruled';
-  const canMove = Boolean(session && game?.status === 'playing' && game.turn === session.your_mark && !pending);
+  const yourMark = game?.your_mark || session?.your_mark || mark;
+  const computerGame = game ? game.mode === 'computer' : mode === 'computer';
+  const canMove = Boolean(session && game?.status === 'playing' && game.turn === yourMark && !pending);
   const board = game?.board || EMPTY_BOARD;
   let status = 'startStatus';
   if (inviteLoading) status = 'checking';
   else if (game?.status === 'waiting') status = session ? 'waiting' : 'invited';
-  else if (game?.status === 'playing') status = !session ? 'full' : game.turn === session.your_mark ? 'yourTurn' : 'theirTurn';
+  else if (game?.status === 'playing') status = !session ? 'full' : game.turn === yourMark ? 'yourTurn' : 'theirTurn';
   else if (game?.status === 'draw') status = 'draw';
-  else if (game?.status === 'won') status = !session ? (game.winner === 'X' ? 'wonX' : 'wonO') : game.winner === session.your_mark ? 'won' : 'lost';
+  else if (game?.status === 'won') status = !session ? (game.winner === 'X' ? 'wonX' : 'wonO') : game.winner === yourMark ? 'won' : 'lost';
   const activeGame = game && ['waiting', 'playing'].includes(game.status) && session;
+  const canRematch = session && game?.mode === 'friend' && ['won', 'draw'].includes(game.status);
 
   return (
     <div className="app-shell">
@@ -244,9 +257,9 @@ function App() {
         <div className="heading"><h1>{t('titleX')} <span>&</span> {t('titleO')}</h1><p>{t('subtitle')}</p></div>
         <section className="game-area" aria-label={t('title')}>
           <div className="players">
-            <div className={`player ${game?.turn === 'X' ? 'active' : ''}`}><span className="small-mark x">×</span><span>{t(session?.your_mark === 'O' ? 'opponent' : 'you')}<small>{t('crosses')}</small></span></div>
+            <div className={`player ${game?.turn === 'X' ? 'active' : ''}`}><span className="small-mark x">×</span><span>{t(yourMark === 'X' ? 'you' : computerGame ? 'computer' : 'opponent')}<small>{t('crosses')}</small></span></div>
             <span className="versus">{t('versus')}</span>
-            <div className={`player ${game?.turn === 'O' ? 'active' : ''}`}><span className="small-mark o">○</span><span>{t(game?.mode === 'computer' || (!game && mode === 'computer') ? 'computer' : session?.your_mark === 'O' ? 'you' : 'friend')}<small>{t('noughts')}</small></span></div>
+            <div className={`player ${game?.turn === 'O' ? 'active' : ''}`}><span className="small-mark o">○</span><span>{t(yourMark === 'O' ? 'you' : computerGame ? 'computer' : 'friend')}<small>{t('noughts')}</small></span></div>
           </div>
           <div className="board" role="group" aria-label={t('board')}>
             {board.map((value, cell) => (
@@ -260,8 +273,10 @@ function App() {
 
         <section className="controls" aria-label={t('settings')}>
           {invitation && !session && game?.status === 'waiting' && <button className="primary" disabled={pending} onClick={joinGame}>{t('join')}</button>}
+          {canRematch && <button className="primary" disabled={pending} onClick={rematch}>↻ {t('nextRound')}</button>}
           <div className="mode-row"><span id="mode-label">{t('chooseMode')}</span><div className="segmented" role="group" aria-labelledby="mode-label"><button aria-pressed={mode === 'computer'} disabled={pending} onClick={() => setMode('computer')}>{t('withComputer')}</button><button aria-pressed={mode === 'friend'} disabled={pending} onClick={() => setMode('friend')}>{t('withFriend')}</button></div></div>
           {mode === 'computer' && <div className="difficulty-row"><label htmlFor="difficulty">{t('difficulty')}</label><select id="difficulty" value={difficulty} disabled={pending} onChange={(event) => setDifficulty(event.target.value)}><option value="easy">{t('easy')}</option><option value="medium">{t('medium')}</option><option value="unbeatable">{t('unbeatable')}</option></select></div>}
+          <div className="difficulty-row"><label htmlFor="mark">{t('chooseMark')}</label><select id="mark" value={mark} disabled={pending} onChange={(event) => setMark(event.target.value)}><option value="X">X · {t('crosses')}</option><option value="O">O · {t('noughts')}</option></select></div>
           <button className="primary" disabled={pending} onClick={() => {
             if (!activeGame || window.confirm(t('confirmNew'))) createGame();
           }}><span>↻</span> {t(game ? 'newGame' : 'startGame')}</button>

@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from api.games import CreatedGame, CreateGame, GameState, GameStore, Move, PlayerSession
+from api.games import CreatedGame, CreateGame, GameState, GameStore, Move, PlayerSession, Rematch
 
 app = FastAPI(title="Tic-Tac-Toe API")
 store = GameStore()
@@ -54,3 +54,8 @@ def get_game(game_id: str, token: PlayerToken) -> GameState:
 @app.post("/api/games/{game_id}/moves", response_model=GameState)
 def make_move(game_id: str, move: Move, token: PlayerToken) -> GameState:
     return store.move(game_id, token, move.cell)
+
+
+@app.post("/api/games/{game_id}/rematch", response_model=GameState)
+def rematch(game_id: str, options: Rematch, token: PlayerToken) -> GameState:
+    return store.rematch(game_id, token, options.round_number)

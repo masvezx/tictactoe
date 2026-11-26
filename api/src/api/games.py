@@ -24,6 +24,11 @@ MAX_GAMES = 1000
 class CreateGame(BaseModel):
     mode: Mode
     difficulty: Difficulty = "medium"
+    mark: Mark = "X"
+
+
+class Rematch(BaseModel):
+    round_number: int = Field(ge=1, strict=True)
 
 
 class Move(BaseModel):
@@ -39,6 +44,8 @@ class GameState(BaseModel):
     turn: Mark | None
     winner: Mark | None
     winning_cells: list[int]
+    round_number: int
+    your_mark: Mark | None
 
 
 class PlayerSession(BaseModel):
@@ -56,7 +63,7 @@ class Game:
     game_id: str
     mode: Mode
     difficulty: Difficulty | None
-    x_token: str
+    x_token: str | None
     invitation_token: str | None
     o_token: str | None = None
     board: list[Mark | None] = field(default_factory=lambda: [None] * 9)
@@ -65,8 +72,9 @@ class Game:
     winner: Mark | None = None
     winning_cells: list[int] = field(default_factory=list)
     created_at: float = field(default_factory=monotonic)
+    round_number: int = 1
 
-    def state(self) -> GameState:
+    def state(self, your_mark: Mark | None = None) -> GameState:
         return GameState(
             game_id=self.game_id,
             mode=self.mode,
@@ -76,6 +84,8 @@ class Game:
             turn=self.turn if self.status == "playing" else None,
             winner=self.winner,
             winning_cells=self.winning_cells.copy(),
+            round_number=self.round_number,
+            your_mark=your_mark,
         )
 
 
@@ -101,24 +111,25 @@ def minimax(board: list[Mark | None], turn: Mark) -> int:
     return max(scores) if turn == "O" else min(scores)
 
 
-def computer_move(board: list[Mark | None], difficulty: Difficulty) -> int:
+def computer_move(board: list[Mark | None], difficulty: Difficulty, mark: Mark = "O") -> int:
     free = [cell for cell, mark in enumerate(board) if mark is None]
     if difficulty == "easy":
         return secrets.choice(free)
     if difficulty == "medium":
-        for mark in ("O", "X"):
+        for candidate in (mark, "X" if mark == "O" else "O"):
             for cell in free:
                 next_board = board.copy()
-                next_board[cell] = mark
+                next_board[cell] = candidate
                 if winning_line(next_board) is not None:
                     return cell
         return secrets.choice(free)
     scores: dict[int, int] = {}
     for cell in free:
         next_board = board.copy()
-        next_board[cell] = "O"
-        scores[cell] = minimax(next_board, "X")
-    return max(scores, key=lambda cell: scores[cell])
+        next_board[cell] = mark
+        scores[cell] = minimax(next_board, "X" if mark == "O" else "O")
+    choose = max if mark == "O" else min
+    return choose(scores, key=lambda cell: scores[cell])
 
 
 class GameStore:
@@ -154,7 +165,7 @@ class GameStore:
     def _authenticate(game: Game, token: str) -> Mark:
         if not token.isascii():
             raise HTTPException(401, "Invalid player token")
-        if secrets.compare_digest(game.x_token, token):
+        if game.x_token is not None and secrets.compare_digest(game.x_token, token):
             return "X"
         if game.o_token is not None and secrets.compare_digest(game.o_token, token):
             return "O"
@@ -166,18 +177,23 @@ class GameStore:
             if len(self._games) >= MAX_GAMES:
                 raise HTTPException(503, "Game capacity reached; try again later")
             invitation_token = secrets.token_urlsafe(32) if options.mode == "friend" else None
+            token = secrets.token_urlsafe(32)
             game = Game(
                 game_id=secrets.token_urlsafe(24),
                 mode=options.mode,
                 difficulty=options.difficulty if options.mode == "computer" else None,
-                x_token=secrets.token_urlsafe(32),
+                x_token=token if options.mark == "X" else None,
+                o_token=token if options.mark == "O" else None,
                 invitation_token=invitation_token,
                 status="playing" if options.mode == "computer" else "waiting",
             )
             self._games[game.game_id] = game
             if invitation_token is not None:
                 self._invitations[invitation_token] = game.game_id
-            return PlayerSession(player_token=game.x_token, your_mark="X", game=game.state()), invitation_token
+            elif options.mark == "O":
+                assert game.difficulty is not None
+                self._place(game, computer_move(game.board, game.difficulty, "X"), "X")
+            return PlayerSession(player_token=token, your_mark=options.mark, game=game.state(options.mark)), invitation_token
 
     def preview(self, invitation_token: str) -> GameState:
         with self._lock:
@@ -188,15 +204,37 @@ class GameStore:
             game = self._invited_game(invitation_token)
             if game.status != "waiting":
                 raise HTTPException(409, "Invitation already used")
-            game.o_token = secrets.token_urlsafe(32)
+            token = secrets.token_urlsafe(32)
+            mark: Mark = "O" if game.x_token is not None else "X"
+            if mark == "O":
+                game.o_token = token
+            else:
+                game.x_token = token
             game.status = "playing"
-            return PlayerSession(player_token=game.o_token, your_mark="O", game=game.state())
+            return PlayerSession(player_token=token, your_mark=mark, game=game.state(mark))
 
     def read(self, game_id: str, token: str) -> GameState:
         with self._lock:
             game = self._get(game_id)
+            mark = self._authenticate(game, token)
+            return game.state(mark)
+
+    def rematch(self, game_id: str, token: str, round_number: int) -> GameState:
+        with self._lock:
+            game = self._get(game_id)
             self._authenticate(game, token)
-            return game.state()
+            if game.mode != "friend" or game.status not in ("won", "draw"):
+                raise HTTPException(409, "A finished friend round is required")
+            if game.round_number != round_number:
+                raise HTTPException(409, "Round has already changed")
+            game.x_token, game.o_token = game.o_token, game.x_token
+            game.board = [None] * 9
+            game.status = "playing"
+            game.turn = "X"
+            game.winner = None
+            game.winning_cells = []
+            game.round_number += 1
+            return game.state(self._authenticate(game, token))
 
     @staticmethod
     def _place(game: Game, cell: int, mark: Mark) -> None:
@@ -226,5 +264,6 @@ class GameStore:
             self._place(game, cell, mark)
             if game.mode == "computer" and game.status == "playing":
                 assert game.difficulty is not None
-                self._place(game, computer_move(game.board, game.difficulty), "O")
-            return game.state()
+                computer_mark: Mark = "O" if mark == "X" else "X"
+                self._place(game, computer_move(game.board, game.difficulty, computer_mark), computer_mark)
+            return game.state(mark)
